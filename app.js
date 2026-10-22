@@ -11,12 +11,16 @@ const REC = {
     materials: [{key: 'ironPrice', label: 'Demir', qty: 108}, {key: 'coalPrice', label: 'Kömür', qty: 36}]
   },
   necklace: {
-    name: 'Ferasan İnci Dizisi', icon: '◉', out: 66, mins: 5, tax: 0.061,
+    name: 'Ferasan İnci Dizisi', icon: '◉', out: 66, mins: 5, tax: 0.059,
     materials: [{key: 'pearlPrice', label: 'Ferasan İncisi', qty: 198}, {key: 'threadPrice', label: 'İpek İpliği', qty: 66}]
   },
   kaftan: {
-    name: 'İpekli Kaftan', icon: '♜', out: 94, mins: 9.5, tax: 0.061,
+    name: 'İpekli Kaftan', icon: '♜', out: 94, mins: 9.5, tax: 0.067,
     materials: [{key: 'silkPrice', label: 'İpek', qty: 94}, {key: 'fabricPrice', label: 'Kumaş', qty: 188}]
+  },
+  basra: {
+    name: 'Basra İnci Küpesi', icon: '◇', out: 197, mins: 8.1, tax: 0.059,
+    materials: [{key: 'basraPearlPrice', label: 'Basra Ham İncisi', qty: 131}, {key: 'silverPrice', label: 'Gümüş', qty: 66}]
   }
 };
 const TYPES = Object.keys(REC);
@@ -26,7 +30,8 @@ const DEFAULT = {
     sword: {bands: 3, hours: 1, minutes: 0, quantity: 111, steelPrice: 650, coalPrice: 52, salePrice: 2900},
     steel: {bands: 3, hours: 1, minutes: 0, quantity: 216, ironPrice: 159, coalPrice: 52, salePrice: 600},
     necklace: {bands: 1, hours: 1, minutes: 0, quantity: 66, pearlPrice: 222, threadPrice: 241, salePrice: 1311, cycleMinutes: 5},
-    kaftan: {bands: 1, hours: 1, minutes: 0, quantity: 94, silkPrice: 464, fabricPrice: 125, salePrice: 1348, cycleMinutes: 9.5}
+    kaftan: {bands: 1, hours: 1, minutes: 0, quantity: 94, silkPrice: 464, fabricPrice: 125, salePrice: 1348, cycleMinutes: 9.5},
+    basra: {bands: 1, hours: 1, minutes: 0, quantity: 197, basraPearlPrice: 538, silverPrice: 1088, salePrice: 1046, cycleMinutes: 8.1}
   },
   ledger: []
 };
@@ -57,13 +62,18 @@ function localDate() {
 }
 function num(value) { const x = Number(value); return Number.isFinite(x) ? x : 0; }
 function fmt(value, digits = 0) { return num(value).toLocaleString('tr-TR', {minimumFractionDigits:digits, maximumFractionDigits:digits}); }
-function money(value) { return fmt(value, 2) + ' akçe'; }
+function money(value) { return fmt(Math.round(num(value))) + ' akçe'; }
 function safe(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function field(label, key, value, step='any') {
   return `<div class="field"><label for="${key}">${safe(label)}</label><input id="${key}" data-key="${key}" inputmode="decimal" type="number" min="0" step="${step}" value="${safe(value)}" autocomplete="off"></div>`;
 }
 function cycleLength(id) {
-  return id === 'kaftan' || id === 'necklace' ? num(state.settings[id].cycleMinutes) : REC[id].mins;
+  return ['kaftan', 'necklace', 'basra'].includes(id) ? num(state.settings[id].cycleMinutes) : REC[id].mins;
+}
+function durationText(minutes) {
+  const seconds = Math.round(num(minutes) * 60);
+  const h = Math.floor(seconds / 3600), m = Math.floor(seconds % 3600 / 60), s = seconds % 60;
+  return (h ? h + ' sa ' : '') + (m ? m + ' dk' : (!h ? '0 dk' : '')) + (s ? ' ' + s + ' sn' : '');
 }
 function materialCost(id, prices, qty) {
   const r = REC[id];
@@ -84,8 +94,8 @@ function calcFor(id) {
   const profitPerCycle = (r.out * num(s.salePrice) * (1-r.tax) - materialCost(id, s, r.out)) * bands;
   return {
     bands, cycles, output, minutes, materials, cost, gross, tax, profit,
-    unitCost: output ? cost/output : 0,
-    unitProfit: output ? profit/output : 0,
+    unitCost: materialCost(id, s, r.out)/r.out,
+    unitProfit: num(s.salePrice) * (1-r.tax) - materialCost(id, s, r.out)/r.out,
     theoreticalHour: duration ? profitPerCycle * (60/duration) : 0,
     completeHour: duration ? profitPerCycle * Math.floor(60/duration + 1e-8) : 0,
     excess: state.mode === 'quantity' ? Math.max(0, output - num(s.quantity)) : 0
@@ -93,24 +103,33 @@ function calcFor(id) {
 }
 function calcResultHtml() {
   const id = state.product, r = REC[id], c = calcFor(id);
+  const s = state.settings[id];
+  const netPerItem = num(s.salePrice) * (1-r.tax);
+  const breakEven = (1-r.tax) > 0 ? Math.ceil(c.unitCost / (1-r.tax)) : 0;
   const matSummary = c.materials.map(m => `${fmt(m.qtyTotal)} ${safe(m.label.toLocaleLowerCase('tr-TR'))}`).join(' · ');
+  const profitClass = c.unitProfit >= 0 ? 'profit' : 'loss';
   return `<section class="card" id="calcResult"><h2>Hesaplama sonucu</h2>
+    <div class="unit-section"><div class="unit-title"><span>📦 TEK ÜRÜN HESABI</span><span class="unit-count">1 adet</span></div>
+      <div class="unit-grid">
+        <div class="unit-tile cost"><div class="unit-label">◉ Birim maliyet</div><strong>${money(c.unitCost)}</strong><small>1 adet üretmenin maliyeti</small></div>
+        <div class="unit-tile ${profitClass}"><div class="unit-label">↗ Birim net kâr</div><strong>${money(c.unitProfit)}</strong><small>Vergi sonrası, 1 adet satışta</small></div>
+      </div>
+      <div class="unit-details"><span>Satış: <b>${money(s.salePrice)}</b></span><span>Vergi sonrası: <b>${money(netPerItem)}</b></span><span>Başabaş: <b>${money(breakEven)}</b></span></div>
+    </div>
     <div class="stats">
-      <div class="stat primary"><small>Net kâr (seçilen üretim)</small><strong>${money(c.profit)}</strong></div>
-      <div class="stat"><small>60 dakikada tamamlanan döngülerle kâr</small><strong>${money(c.completeHour)}</strong></div>
+      <div class="stat primary"><small>Seçilen üretimde toplam net kâr</small><strong>${money(c.profit)}</strong></div>
+      <div class="stat"><small>60 dakikada biten üretimlerin kârı</small><strong>${money(c.completeHour)}</strong></div>
       <div class="stat"><small>Teorik saatlik kâr (kesintisiz hız)</small><strong>${money(c.theoreticalHour)}</strong></div>
-      <div class="stat"><small>Üretim</small><strong>${fmt(c.output)} adet</strong></div>
-      <div class="stat"><small>Üretim süresi</small><strong>${fmt(c.minutes, 2)} dk</strong></div>
+      <div class="stat"><small>Üretim miktarı</small><strong>${fmt(c.output)} adet</strong></div>
+      <div class="stat"><small>Üretim süresi</small><strong>${durationText(c.minutes)}</strong></div>
       <div class="stat"><small>Tam döngü (bant başına)</small><strong>${fmt(c.cycles)}</strong></div>
     </div>
     <div class="row"><span>Hammadde</span><span>${matSummary}</span></div>
-    <div class="row"><span>Hammadde maliyeti</span><span>${money(c.cost)}</span></div>
+    <div class="row"><span>Toplam hammadde maliyeti</span><span>${money(c.cost)}</span></div>
     <div class="row"><span>Brüt satış</span><span>${money(c.gross)}</span></div>
     <div class="row"><span>Satış vergisi (%${fmt(r.tax*100,1)})</span><span>−${money(c.tax)}</span></div>
-    <div class="row"><span>Birim maliyet</span><span>${money(c.unitCost)}</span></div>
-    <div class="row"><span>Birim net kâr</span><span>${money(c.unitProfit)}</span></div>
     ${state.mode==='quantity' ? `<div class="row"><span>Hedef üzeri üretim</span><span>${fmt(c.excess)} adet</span></div>` : ''}
-    <p class="hint">60 dakika hesabı yalnız biten döngüleri içerir. Teorik saatlik hız, döngü kârının 60 dakikaya oranıdır. Ürünlerin tamamının seçilen fiyattan satıldığı varsayılır.</p>
+    <p class="hint">Tutarlar yalnız ekranda en yakın tam akçeye yuvarlanır; hesaplamalar tam hassasiyetle yapılır. 60 dakikalık kâr tamamlanan döngüleri içerir. Tüm ürünlerin belirtilen fiyattan satıldığı varsayılır.</p>
   </section>`;
 }
 function calcHtml() {
@@ -119,9 +138,9 @@ function calcHtml() {
     <div class="grid">${field('Üretim bandı', 'bands', s.bands, '1')}
       ${field('Satış fiyatı (akçe)', 'salePrice', s.salePrice)}
       ${r.materials.map(m => field(m.label+' alış fiyatı (akçe)', m.key, s[m.key])).join('')}
-      ${(id==='kaftan'||id==='necklace') ? field('Bir döngü süresi (dakika)', 'cycleMinutes', s.cycleMinutes, '0.01') : ''}
+      ${(['kaftan','necklace','basra'].includes(id)) ? field('Bir döngü süresi (dakika)', 'cycleMinutes', s.cycleMinutes, '0.01') : ''}
     </div>
-    <p class="hint">Bant başına 1 döngü: ${fmt(r.out)} adet · ${fmt(duration,2)} dakika · ${r.materials.map(m=>fmt(m.qty)+' '+safe(m.label.toLocaleLowerCase('tr-TR'))).join(' + ')} · satış vergisi %${fmt(r.tax*100,1)}. İşçilik kesintisi yok.${id==='kaftan'?' Süre geçici olarak 9,5 dakika alındı; kesinleşince buradan değiştirebilirsin.':''}</p>
+    <p class="hint">Bant başına 1 döngü: ${fmt(r.out)} adet · ${durationText(duration)} · ${r.materials.map(m=>fmt(m.qty)+' '+safe(m.label.toLocaleLowerCase('tr-TR'))).join(' + ')} · satış vergisi %${fmt(r.tax*100,1)}. İşçilik kesintisi yok.${id==='kaftan'?' Süre geçici olarak 9 dk 30 sn alındı; kesinleşince buradan değiştirebilirsin.':id==='basra'?' Süre, 9 dakikadan %10 indirimle 8 dk 6 sn olarak hesaplandı.':''}</p>
   </section>
   <section class="card"><h2>Hesaplama yöntemi</h2>
     <div class="toggle"><button data-mode="time" class="${state.mode==='time'?'active':''}">Süreye göre</button><button data-mode="quantity" class="${state.mode==='quantity'?'active':''}">Adede göre</button></div>
@@ -183,7 +202,7 @@ function trackHtml() {
     <div class="field"><label for="trackDate">Tarih</label><input type="date" id="trackDate" value="${trackDate}"></div>
     <div class="stats"><div class="stat"><small>Üretilen</small><strong>${fmt(summary.made)} adet</strong></div>
       <div class="stat"><small>Satılan</small><strong>${fmt(summary.sold)} adet</strong></div>
-      <div class="stat"><small>Güncel stok (tüm günler)</small><strong>${fmt(summary.stock.qty,2)} adet</strong></div>
+      <div class="stat"><small>Güncel stok (tüm günler)</small><strong>${fmt(summary.stock.qty)} adet</strong></div>
       <div class="stat"><small>Net satış geliri</small><strong>${money(summary.revenue)}</strong></div>
       <div class="stat primary"><small>Günlük gerçekleşen net kâr</small><strong>${money(summary.profit)}</strong></div></div>
     <p class="hint">Stok tüm kayıtların güncel toplamıdır. Günlük kâr yalnız gerçekleşen satışlara göre hesaplanır.</p>
@@ -266,7 +285,7 @@ function removeEntry(id) {
   state.ledger=next;save();render();
 }
 function exportData() {
-  const blob=new Blob([JSON.stringify({version:2,exportedAt:new Date().toISOString(),settings:state.settings,ledger:state.ledger},null,2)],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({version:3,exportedAt:new Date().toISOString(),settings:state.settings,ledger:state.ledger},null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='tuccar-yedek-'+localDate()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 async function importData(event) {
@@ -282,14 +301,33 @@ async function importData(event) {
   } catch (err) {alert('Yedek yüklenemedi: '+err.message)}
 }
 function init() {
-  // Inject the small v1.1 layout patch so an existing installation only needs
+  // Inject layout and v1.2 highlights so an existing installation only needs
   // app.js and sw.js to be replaced. Previous style.css can stay unchanged.
   const responsiveStyle=document.createElement('style');
-  responsiveStyle.textContent='#products{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}#products button{min-width:0;white-space:normal;font-size:13px}.field input[type=number]{direction:ltr;text-align:left}@media(min-width:680px){#products{grid-template-columns:repeat(4,minmax(0,1fr))}}';
+  responsiveStyle.textContent=`
+    #products{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+    #products button{min-width:0;white-space:normal;font-size:12px;line-height:1.2;min-height:50px}
+    .field input[type=number]{direction:ltr;text-align:left}
+    .unit-section{background:#0d1729;border:1px solid #34465c;border-radius:14px;padding:13px;margin:4px 0 15px}
+    .unit-title{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#cbd5e1;font-size:12px;font-weight:750;letter-spacing:.5px;margin-bottom:12px}
+    .unit-count{background:#29354b;padding:4px 9px;border-radius:99px;color:#e2e8f0;letter-spacing:0}
+    .unit-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+    .unit-tile{border-radius:13px;padding:14px 10px;border:1px solid}
+    .unit-tile.cost{background:#382a19;border-color:#92612b;color:#fcd59c}
+    .unit-tile.profit{background:#123628;border-color:#27845e;color:#a7f3d0}
+    .unit-tile.loss{background:#471e26;border-color:#b45364;color:#fecdd3}
+    .unit-label{font-size:12px;font-weight:750;min-height:31px}
+    .unit-tile strong{display:block;font-size:clamp(16px,4vw,22px);line-height:1.2;margin:5px 0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+    .unit-tile small{display:block;color:#cbd5e1;font-size:11px;line-height:1.35}
+    .unit-details{display:flex;gap:8px 15px;flex-wrap:wrap;margin-top:13px;color:#cbd5e1;font-size:12px}
+    .unit-details b{color:#f1f5f9}
+    @media(min-width:680px){#products{grid-template-columns:repeat(5,minmax(0,1fr))}}
+    @media(max-width:375px){.unit-grid{grid-template-columns:1fr}.unit-label{min-height:0}}
+  `;
   document.head.appendChild(responsiveStyle);
   const products=document.getElementById('products');
   products.innerHTML=TYPES.map(id=>`<button data-product="${id}" title="${safe(REC[id].name)}">${REC[id].icon} ${safe(REC[id].name)}</button>`).join('');
-  const pill=document.querySelector('header .pill');if(pill)pill.textContent='v1.1';
+  const pill=document.querySelector('header .pill');if(pill)pill.textContent='v1.2';
   products.addEventListener('click',e=>{const b=e.target.closest('[data-product]');if(b){state.product=b.dataset.product;save();render()}});
   document.getElementById('sections').addEventListener('click',e=>{const b=e.target.closest('[data-section]');if(b){state.section=b.dataset.section;save();render()}});
   if ('serviceWorker' in navigator) {
