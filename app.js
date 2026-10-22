@@ -26,12 +26,17 @@ const REC = {
 const TYPES = Object.keys(REC);
 const DEFAULT = {
   product: 'sword', section: 'calc', mode: 'time',
+  weekly: {
+    sword: 2517, steel: 479, necklace: 1199, kaftan: 1532, basra: 893,
+    coalPrice: 53, ironPrice: 182, pearlPrice: 189, threadPrice: 227,
+    silkPrice: 554, fabricPrice: 113, basraPearlPrice: 407, silverPrice: 962
+  },
   settings: {
-    sword: {bands: 3, hours: 1, minutes: 0, quantity: 111, steelPrice: 650, coalPrice: 52, salePrice: 2900},
-    steel: {bands: 3, hours: 1, minutes: 0, quantity: 216, ironPrice: 159, coalPrice: 52, salePrice: 600},
-    necklace: {bands: 1, hours: 1, minutes: 0, quantity: 66, pearlPrice: 222, threadPrice: 241, salePrice: 1311, cycleMinutes: 5},
-    kaftan: {bands: 1, hours: 1, minutes: 0, quantity: 94, silkPrice: 464, fabricPrice: 125, salePrice: 1348, cycleMinutes: 9.5},
-    basra: {bands: 1, hours: 1, minutes: 0, quantity: 197, basraPearlPrice: 538, silverPrice: 1088, salePrice: 1046, cycleMinutes: 8.1}
+    sword: {bands: 3, hours: 1, minutes: 0, quantity: 111, steelPrice: 600, coalPrice: 58, salePrice: 2565, cycleMins: 11, cycleSecs: 0},
+    steel: {bands: 3, hours: 1, minutes: 0, quantity: 216, ironPrice: 191, coalPrice: 58, salePrice: 487, cycleMins: 4, cycleSecs: 0},
+    necklace: {bands: 1, hours: 1, minutes: 0, quantity: 66, pearlPrice: 167, threadPrice: 156, salePrice: 951, cycleMins: 5, cycleSecs: 0},
+    kaftan: {bands: 1, hours: 1, minutes: 0, quantity: 94, silkPrice: 435, fabricPrice: 84, salePrice: 1141, cycleMins: 9, cycleSecs: 30},
+    basra: {bands: 1, hours: 1, minutes: 0, quantity: 197, basraPearlPrice: 538, silverPrice: 1088, salePrice: 1046, cycleMins: 8, cycleSecs: 6}
   },
   ledger: []
 };
@@ -46,7 +51,22 @@ function load() {
   try {
     const data = JSON.parse(localStorage.getItem(KEY));
     if (data && data.settings && Array.isArray(data.ledger)) {
-      for (const id of TYPES) Object.assign(base.settings[id], data.settings[id] || {});
+      for (const id of TYPES) {
+        const saved = data.settings[id] || {};
+        Object.assign(base.settings[id], saved);
+        // Upgrade v1.2 fractional-minute cycle input without losing saved changes.
+        if (!Object.prototype.hasOwnProperty.call(saved,'cycleMins') && Number.isFinite(Number(saved.cycleMinutes))) {
+          const totalSeconds=Math.max(0,Math.round(num(saved.cycleMinutes)*60));
+          base.settings[id].cycleMins=Math.floor(totalSeconds/60);
+          base.settings[id].cycleSecs=totalSeconds%60;
+        }
+      }
+      if (data.weekly && typeof data.weekly==='object') {
+        for (const k of Object.keys(base.weekly)) {
+          const v=Number(data.weekly[k]);
+          if (Number.isFinite(v) && v>=0) base.weekly[k]=v;
+        }
+      }
       base.ledger = data.ledger;
       if (TYPES.includes(data.product)) base.product = data.product;
       if (['calc', 'track'].includes(data.section)) base.section = data.section;
@@ -67,13 +87,17 @@ function safe(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'
 function field(label, key, value, step='any') {
   return `<div class="field"><label for="${key}">${safe(label)}</label><input id="${key}" data-key="${key}" inputmode="decimal" type="number" min="0" step="${step}" value="${safe(value)}" autocomplete="off"></div>`;
 }
-function cycleLength(id) {
-  return ['kaftan', 'necklace', 'basra'].includes(id) ? num(state.settings[id].cycleMinutes) : REC[id].mins;
+function cycleSeconds(id) {
+  const item=state.settings[id];
+  const mins=Math.max(0,Math.floor(num(item.cycleMins)));
+  const secs=Math.max(0,Math.min(59,Math.floor(num(item.cycleSecs))));
+  return mins*60+secs;
 }
+function cycleLength(id) { return cycleSeconds(id)/60; }
 function durationText(minutes) {
   const seconds = Math.round(num(minutes) * 60);
   const h = Math.floor(seconds / 3600), m = Math.floor(seconds % 3600 / 60), s = seconds % 60;
-  return (h ? h + ' sa ' : '') + (m ? m + ' dk' : (!h ? '0 dk' : '')) + (s ? ' ' + s + ' sn' : '');
+  return (h ? h + ' sa ' : '') + m + ' dk ' + String(s).padStart(2,'0') + ' sn';
 }
 function materialCost(id, prices, qty) {
   const r = REC[id];
@@ -81,10 +105,10 @@ function materialCost(id, prices, qty) {
 }
 function calcFor(id) {
   const r = REC[id], s = state.settings[id], bands = Math.max(1, Math.floor(num(s.bands)));
-  const duration = cycleLength(id);
-  const minutesRequested = Math.max(0, num(s.hours)*60 + num(s.minutes));
-  const cycles = duration > 0 ? (state.mode === 'time'
-    ? Math.floor(minutesRequested / duration + 1e-8)
+  const seconds = cycleSeconds(id), duration = seconds/60;
+  const secondsRequested = Math.max(0, num(s.hours)*3600 + num(s.minutes)*60);
+  const cycles = seconds > 0 ? (state.mode === 'time'
+    ? Math.floor(secondsRequested / seconds + 1e-8)
     : Math.ceil(Math.max(0,num(s.quantity)) / (r.out * bands))) : 0;
   const output = cycles * r.out * bands;
   const minutes = cycles * duration;
@@ -97,7 +121,7 @@ function calcFor(id) {
     unitCost: materialCost(id, s, r.out)/r.out,
     unitProfit: num(s.salePrice) * (1-r.tax) - materialCost(id, s, r.out)/r.out,
     theoreticalHour: duration ? profitPerCycle * (60/duration) : 0,
-    completeHour: duration ? profitPerCycle * Math.floor(60/duration + 1e-8) : 0,
+    completeHour: seconds ? profitPerCycle * Math.floor(3600/seconds + 1e-8) : 0,
     excess: state.mode === 'quantity' ? Math.max(0, output - num(s.quantity)) : 0
   };
 }
@@ -132,16 +156,68 @@ function calcResultHtml() {
     <p class="hint">Tutarlar yalnız ekranda en yakın tam akçeye yuvarlanır; hesaplamalar tam hassasiyetle yapılır. 60 dakikalık kâr tamamlanan döngüleri içerir. Tüm ürünlerin belirtilen fiyattan satıldığı varsayılır.</p>
   </section>`;
 }
+const WHOLESALE_RATE=0.90*1.02; // Finished goods: 10% wholesale discount, 2% sale bonus.
+const BUY_RATE=1-0.045; // Bazaar purchase discount from the supplied ability screenshot.
+function comparison(current, weekly, ratio, sale=false) {
+  const target=weekly*ratio;
+  if (!(target>0)) return {cls:'neutral',label:'Ortalama fiyat girilmeli',pct:0,target:0};
+  const pct=100*(current/target-1);
+  const high=pct>=5, low=pct<=-5;
+  const cls=sale?(high?'good':low?'bad':'neutral'):(low?'good':high?'bad':'neutral');
+  const level=sale?(high?'Satış için yüksek fiyat':low?'Satış için düşük fiyat':'Ortalama civarında'):(low?'Alış için düşük fiyat':high?'Alış için yüksek fiyat':'Ortalama civarında');
+  return {cls,label:level,pct,target};
+}
+function marketStatusHtml(value,weekly,ratio,sale) {
+  const c=comparison(value,weekly,ratio,sale);
+  if (!c.target) return '<span class="market-pill neutral">Ortalama bekleniyor</span>';
+  const sign=c.pct>=0?'+':'−';
+  return `<span class="market-pill ${c.cls}">${sign}%${fmt(Math.abs(c.pct),1)} · ${c.label}</span>`;
+}
+function marketResultHtml() {
+  const id=state.product,r=REC[id],s=state.settings[id],weekly=num(state.weekly[id]);
+  const materials=r.materials.map(m=>{
+    if (id==='sword' && m.key==='steelPrice') {
+      return `<div class="market-line"><span>${safe(m.label)} · oyuncu pazarı</span><span class="market-pill neutral">${money(s[m.key])} · bağımsız fiyat</span></div>`;
+    }
+    const reference=num(state.weekly[m.key]);
+    return `<div class="market-line"><span>${safe(m.label)} · ${money(s[m.key])} alış</span>${marketStatusHtml(num(s[m.key]),reference,BUY_RATE,false)}</div>`;
+  }).join('');
+  return `<div class="market-focus"><span>Bugünkü toptan satış: <b>${money(s.salePrice)}</b></span><span>Haftalık toptan karşılığı: <b>${money(weekly*WHOLESALE_RATE)}</b></span></div>
+    <div class="market-main">${marketStatusHtml(num(s.salePrice),weekly,WHOLESALE_RATE,true)}</div>
+    <div class="market-lines">${materials}</div>
+    <p class="hint">Kıyaslama, haftalık <b>çarşı ortalamasını</b> aynı tür alış/satış fiyatına yaklaşık dönüştürür. Ürün satışında ×0,918; hammadde alışında ×0,955 kullanılır. Kâr hesabına ayrıca müdahale etmez.</p>`;
+}
+function marketHtml() {
+  const id=state.product,r=REC[id];
+  const inputs=[{key:id,label:r.name+' haftalık çarşı ortalaması'}, ...r.materials
+    .filter(m=>!(id==='sword'&&m.key==='steelPrice'))
+    .map(m=>({key:m.key,label:m.label+' haftalık çarşı ortalaması'}))];
+  return `<section class="card market-card"><h2>📊 Haftalık fiyat değerlendirmesi</h2>
+    <div id="marketResult">${marketResultHtml()}</div>
+    <details id="marketSettings"><summary>Haftalık ortalamaları düzenle</summary>
+      <div class="grid market-edit-grid">${inputs.map(x=>field(x.label,'weekly_'+x.key,state.weekly[x.key],'1').replace(`data-key="weekly_${x.key}"`,`data-weekly="${x.key}"`)).join('')}</div>
+      <p class="hint">Yalnız ortalama fiyatları düzenlemen yeterli. Değerler cihazında saklanır. Bunlar önceki ekran görüntülerinden alınan haftalık ortalamalardır; piyasa kendiliğinden güncellenmez.</p>
+    </details>
+  </section>`;
+}
+function refreshMarketResult() {
+  const el=document.getElementById('marketResult');
+  if (el) el.innerHTML=marketResultHtml();
+}
 function calcHtml() {
   const id = state.product, r = REC[id], s = state.settings[id], duration = cycleLength(id);
   return `<section class="card"><h2>${safe(r.name)} üretim ayarları</h2>
     <div class="grid">${field('Üretim bandı', 'bands', s.bands, '1')}
       ${field('Satış fiyatı (akçe)', 'salePrice', s.salePrice)}
       ${r.materials.map(m => field(m.label+' alış fiyatı (akçe)', m.key, s[m.key])).join('')}
-      ${(['kaftan','necklace','basra'].includes(id)) ? field('Bir döngü süresi (dakika)', 'cycleMinutes', s.cycleMinutes, '0.01') : ''}
     </div>
-    <p class="hint">Bant başına 1 döngü: ${fmt(r.out)} adet · ${durationText(duration)} · ${r.materials.map(m=>fmt(m.qty)+' '+safe(m.label.toLocaleLowerCase('tr-TR'))).join(' + ')} · satış vergisi %${fmt(r.tax*100,1)}. İşçilik kesintisi yok.${id==='kaftan'?' Süre geçici olarak 9 dk 30 sn alındı; kesinleşince buradan değiştirebilirsin.':id==='basra'?' Süre, 9 dakikadan %10 indirimle 8 dk 6 sn olarak hesaplandı.':''}</p>
+    <div class="cycle-time"><div class="cycle-heading">⏱ Bir üretim döngüsünün süresi</div>
+      <div class="grid cycle-grid">${field('Dakika','cycleMins',s.cycleMins,'1')}${field('Saniye (0–59)','cycleSecs',s.cycleSecs,'1')}</div>
+      <div class="cycle-preview">Hesaplanan süre: <strong id="cyclePreview">${durationText(duration)}</strong></div>
+    </div>
+    <p class="hint">Bant başına 1 döngü: ${fmt(r.out)} adet · ${durationText(duration)} · ${r.materials.map(m=>fmt(m.qty)+' '+safe(m.label.toLocaleLowerCase('tr-TR'))).join(' + ')} · satış vergisi %${fmt(r.tax*100,1)}. İşçilik kesintisi yok. Süreyi doğruladığın fiilî döngüye göre gir; ekstra bonus uygulanmaz.</p>
   </section>
+  ${marketHtml()}
   <section class="card"><h2>Hesaplama yöntemi</h2>
     <div class="toggle"><button data-mode="time" class="${state.mode==='time'?'active':''}">Süreye göre</button><button data-mode="quantity" class="${state.mode==='quantity'?'active':''}">Adede göre</button></div>
     ${state.mode==='time'?`<div class="grid">${field('Saat','hours',s.hours,'1')}${field('Dakika','minutes',s.minutes,'1')}</div>`:field('Hedef üretim adedi','quantity',s.quantity,'1')}
@@ -239,12 +315,23 @@ function refreshCalcResult() {
   if (output) output.outerHTML = calcResultHtml();
 }
 function bind() {
+  document.querySelectorAll('[data-weekly]').forEach(el=>el.addEventListener('input',()=>{
+    const k=el.dataset.weekly;
+    state.weekly[k]=el.value;
+    save();
+    refreshMarketResult();
+  }));
   document.querySelectorAll('[data-key]').forEach(el=>el.addEventListener('input',()=>{
     const key = el.dataset.key;
     if (state.section === 'calc') {
       state.settings[state.product][key] = el.value;
       save();
       refreshCalcResult();
+      if (key==='cycleMins'||key==='cycleSecs') {
+        const label=document.getElementById('cyclePreview');
+        if(label)label.textContent=durationText(cycleLength(state.product));
+      }
+      refreshMarketResult();
     } else if (key === 'entryCycles' || key === 'entryBands') {
       const out = document.getElementById('entryOutput');
       if (out) out.textContent = fmt(REC[state.product].out*num(document.getElementById('entryCycles').value)*num(document.getElementById('entryBands').value)) + ' adet';
@@ -285,7 +372,7 @@ function removeEntry(id) {
   state.ledger=next;save();render();
 }
 function exportData() {
-  const blob=new Blob([JSON.stringify({version:3,exportedAt:new Date().toISOString(),settings:state.settings,ledger:state.ledger},null,2)],{type:'application/json'});
+  const blob=new Blob([JSON.stringify({version:4,exportedAt:new Date().toISOString(),settings:state.settings,weekly:state.weekly,ledger:state.ledger},null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='tuccar-yedek-'+localDate()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 async function importData(event) {
@@ -296,18 +383,46 @@ async function importData(event) {
       data.ledger.some(e=>!TYPES.includes(e.product)||!['production','sale'].includes(e.type)||!/^\d{4}-\d{2}-\d{2}$/.test(e.date)||!Number.isFinite(e.qty)||e.qty<=0)) throw Error('Geçersiz yedek biçimi.');
     const check=replay(data.ledger);if(check.error)throw Error(check.error);
     if(!confirm('Mevcut kayıtlar ve ayarlar yedekle değiştirilecek. Devam edilsin mi?'))return;
-    for (const id of TYPES) state.settings[id]={...DEFAULT.settings[id],...(data.settings[id]||{})};
+    for (const id of TYPES) {
+      const saved=data.settings[id]||{};
+      state.settings[id]={...DEFAULT.settings[id],...saved};
+      if(!Object.prototype.hasOwnProperty.call(saved,'cycleMins') && Number.isFinite(Number(saved.cycleMinutes))) {
+        const seconds=Math.max(0,Math.round(num(saved.cycleMinutes)*60));
+        state.settings[id].cycleMins=Math.floor(seconds/60);
+        state.settings[id].cycleSecs=seconds%60;
+      }
+    }
+    state.weekly={...DEFAULT.weekly,...(data.weekly||{})};
     state.ledger=data.ledger;save();render();
   } catch (err) {alert('Yedek yüklenemedi: '+err.message)}
 }
 function init() {
-  // Inject layout and v1.2 highlights so an existing installation only needs
+  // Inject layout and v1.3 highlights so an existing installation only needs
   // app.js and sw.js to be replaced. Previous style.css can stay unchanged.
   const responsiveStyle=document.createElement('style');
   responsiveStyle.textContent=`
     #products{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
     #products button{min-width:0;white-space:normal;font-size:12px;line-height:1.2;min-height:50px}
     .field input[type=number]{direction:ltr;text-align:left}
+    .cycle-time{margin-top:12px;border-radius:12px;background:#111b30;border:1px solid #3b5068;padding:13px}
+    .cycle-heading{font-size:13px;font-weight:750;margin-bottom:10px}
+    .cycle-grid{max-width:420px}
+    .cycle-preview{font-size:12px;color:#cbd5e1}.cycle-preview strong{color:#93c5fd}
+    .market-card h2{margin-bottom:14px}
+    .market-focus{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+    .market-focus span{display:block;background:#0f192b;border-radius:10px;padding:10px;font-size:12px;color:#9ca3af}
+    .market-focus b{display:block;color:#e5e7eb;margin-top:5px;font-size:16px}
+    .market-main{margin:12px 0}
+    .market-pill{display:inline-block;font-size:12px;font-weight:750;border:1px solid;padding:5px 9px;border-radius:9px}
+    .market-pill.good{color:#86efac;background:#123628;border-color:#27845e}
+    .market-pill.bad{color:#fda4af;background:#431b27;border-color:#9f4352}
+    .market-pill.neutral{color:#fdba74;background:#3b2b1d;border-color:#94662d}
+    .market-line{display:flex;align-items:center;justify-content:space-between;gap:9px;border-bottom:1px solid #2a354a;padding:9px 0;font-size:12px}
+    .market-line span:first-child{flex:1}.market-line .market-pill{text-align:right;max-width:65%}
+    .market-card details{border-top:1px solid #2e3c52;padding-top:12px;margin-top:14px}
+    .market-card summary{cursor:pointer;color:#93c5fd;font-size:13px;font-weight:700}
+    .market-edit-grid{margin-top:12px}
+    @media(max-width:420px){.market-focus{grid-template-columns:1fr}.market-line{align-items:start;flex-direction:column}.market-line .market-pill{max-width:none}}
     .unit-section{background:#0d1729;border:1px solid #34465c;border-radius:14px;padding:13px;margin:4px 0 15px}
     .unit-title{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#cbd5e1;font-size:12px;font-weight:750;letter-spacing:.5px;margin-bottom:12px}
     .unit-count{background:#29354b;padding:4px 9px;border-radius:99px;color:#e2e8f0;letter-spacing:0}
@@ -327,7 +442,7 @@ function init() {
   document.head.appendChild(responsiveStyle);
   const products=document.getElementById('products');
   products.innerHTML=TYPES.map(id=>`<button data-product="${id}" title="${safe(REC[id].name)}">${REC[id].icon} ${safe(REC[id].name)}</button>`).join('');
-  const pill=document.querySelector('header .pill');if(pill)pill.textContent='v1.2';
+  const pill=document.querySelector('header .pill');if(pill)pill.textContent='v1.3';
   products.addEventListener('click',e=>{const b=e.target.closest('[data-product]');if(b){state.product=b.dataset.product;save();render()}});
   document.getElementById('sections').addEventListener('click',e=>{const b=e.target.closest('[data-section]');if(b){state.section=b.dataset.section;save();render()}});
   if ('serviceWorker' in navigator) {
