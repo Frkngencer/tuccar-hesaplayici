@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'tuccar-v1.5.0';
+const CACHE = 'tuccar-v1.6.0';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
