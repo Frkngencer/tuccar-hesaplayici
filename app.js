@@ -46,3 +46,233 @@ function exportData(){let blob=new Blob([JSON.stringify({...state,version:5,expo
 async function importData(event){let f=event.target.files?.[0];if(!f)return;try{let data=JSON.parse(await f.text());if(!data.settings?.sword||!data.settings?.steel||!Array.isArray(data.ledger)||data.ledger.length>100000||data.ledger.some(e=>!REC[e.product]||!['production','sale'].includes(e.type)||!/^\d{4}-\d{2}-\d{2}$/.test(e.date)||!(n(e.qty)>0)))throw Error('Geçersiz yedek.');let check=replay(data.ledger);if(check.error)throw Error(check.error);if(!confirm('Mevcut veriler yedekle değiştirilecek. Devam edilsin mi?'))return;let next=clone(DEFAULT);for(let id of TYPES)Object.assign(next.settings[id],data.settings[id]||{});Object.assign(next.weekly,data.weekly||{});next.ledger=data.ledger;next.product=TYPES.includes(data.product)?data.product:state.product;next.section=['calc','track'].includes(data.section)?data.section:state.section;next.mode=['time','quantity'].includes(data.mode)?data.mode:state.mode;state=next;save();render()}catch(e){alert('Yedek yüklenemedi: '+e.message)}}
 function init(){let style=document.createElement('style');style.textContent=`#products{display:flex;align-items:center;gap:10px}#products label{font-size:13px;white-space:nowrap;color:#cbd5e1}#productSelect,#recipeSelect{min-width:0;width:100%;padding:12px;background:#182238;border:1px solid #5579a7;border-radius:10px;color:#fff;font-size:16px}.field input[type=number]{direction:ltr;text-align:left}.cycle-time{margin-top:12px;border-radius:12px;background:#111b30;border:1px solid #3b5068;padding:13px}.cycle-heading{font-size:13px;font-weight:750;margin-bottom:10px}.market-focus{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.market-focus span{display:block;background:#0f192b;border-radius:10px;padding:10px;font-size:12px;color:#9ca3af}.market-focus b{display:block;color:#e5e7eb;margin-top:5px;font-size:16px}.market-main{margin:12px 0}.market-pill{display:inline-block;font-size:12px;font-weight:750;border:1px solid;padding:5px 9px;border-radius:9px}.market-pill.good{color:#86efac;background:#123628;border-color:#27845e}.market-pill.bad{color:#fda4af;background:#431b27;border-color:#9f4352}.market-pill.neutral{color:#fdba74;background:#3b2b1d;border-color:#94662d}.market-line{display:flex;align-items:center;justify-content:space-between;gap:9px;border-bottom:1px solid #2a354a;padding:9px 0;font-size:12px}.market-card details,details{padding-top:12px;margin-top:12px}.market-focus{margin-bottom:10px}.unit-section{background:#0d1729;border:1px solid #34465c;border-radius:14px;padding:13px;margin:4px 0 15px}.unit-title{font-size:12px;font-weight:750;margin-bottom:12px}.unit-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.unit-tile{border-radius:13px;padding:14px 10px;border:1px solid}.unit-tile.cost{background:#382a19;border-color:#92612b;color:#fcd59c}.unit-tile.profit{background:#123628;border-color:#27845e;color:#a7f3d0}.unit-tile.loss{background:#471e26;border-color:#b45364;color:#fecdd3}.unit-label{font-size:12px;font-weight:750}.unit-tile strong{display:block;font-size:clamp(16px,4vw,22px);margin-top:8px;overflow-wrap:anywhere}.check{display:block;margin:14px 0;color:#cbd5e1}.check input{width:18px;height:18px;vertical-align:middle}@media(max-width:420px){.market-focus{grid-template-columns:1fr}.market-line{flex-direction:column;align-items:start}.unit-grid{grid-template-columns:1fr}}`;document.head.appendChild(style);let p=document.getElementById('products');p.innerHTML='<label for="productSelect">Ürün seç</label><select id="productSelect">'+TYPES.map(id=>`<option value="${id}">${REC[id].icon} ${esc(REC[id].name)}</option>`).join('')+'</select>';p.addEventListener('change',e=>{if(e.target.id==='productSelect'){state.product=e.target.value;save();render()}});let pill=document.querySelector('header .pill');if(pill)pill.textContent='v1.4';document.getElementById('sections').addEventListener('click',e=>{let b=e.target.closest('[data-section]');if(b){state.section=b.dataset.section;save();render()}});if('serviceWorker'in navigator){let refreshing=false;navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!refreshing){refreshing=true;location.reload()}});window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}))}render()}
 init();
+
+
+'use strict';
+/* Tüccar v1.5: v1.4 üzerine geriye uyumlu bant/parti güncellemesi.
+ * Mevcut localStorage anahtarı ve eski üretim/satış kayıtları korunur.
+ */
+(function () {
+  if (typeof REC === 'undefined' || typeof state === 'undefined' || typeof calcHtml !== 'function') {
+    throw new Error('Tüccar v1.4 temel kodu yüklenmedi.');
+  }
+
+  // Her üründe ayrı bant ve bant başına parti sayısı tutulur.
+  // Üretim süresi alanı *tek partinin* süresidir.
+  function migrateBatchSettings() {
+    let changed = false;
+    for (const id of TYPES) {
+      const s = state.settings[id];
+      if (s.batchSchemaV15 !== 1) {
+        if (!Number.isInteger(Number(s.batches)) || Number(s.batches) < 1) {
+          s.batches = id === 'rifle' ? 3 : 1;
+        }
+        if (id === 'rifle') {
+          // v1.4'te 15:24 dört partinin toplamıydı; 1 parti 3:51.
+          if (Number(s.cycleMins) * 60 + Number(s.cycleSecs) === 924) {
+            s.cycleMins = 3;
+            s.cycleSecs = 51;
+          }
+          if (Number(s.bands) === 1) s.bands = 3;
+        }
+        s.batchSchemaV15 = 1;
+        changed = true;
+      }
+    }
+    if (changed) save();
+  }
+  migrateBatchSettings();
+
+  const originalCalcHtml = calcHtml;
+  const originalTrackHtml = trackHtml;
+  const originalBind = bind;
+  const originalRanking = ranking;
+  const originalRender = render;
+
+  function positiveInt(x) { return Math.max(1, Math.floor(n(x))); }
+  function batchCount(id) { return positiveInt(state.settings[id].batches); }
+
+  // Bir banttaki partiler ardışık, bantlar birbiriyle eşzamanlı çalışır.
+  // Bu nedenle 3 bant x 3 parti, 9 partilik çıktı üretir; süre ise 3 parti süresidir.
+  window.calculate = function (id) {
+    const r = recipe(id), s = state.settings[id];
+    const bands = positiveInt(s.bands);
+    const batches = batchCount(id);
+    const singleSec = cycle(id);
+    const sec = singleSec * batches;
+    const totalRequested = Math.max(0, n(s.hours) * 3600 + n(s.minutes) * 60);
+    const count = state.mode === 'time'
+      ? Math.floor(totalRequested / sec)
+      : Math.ceil(Math.max(0, n(s.quantity)) / (r.out * bands * batches));
+    const qty = count * bands * batches * r.out;
+    const gross = qty * n(s.salePrice);
+    const tax = gross * r.tax;
+    const material = cost(id, s, qty);
+    const perSetProfit = (r.out * n(s.salePrice) * (1 - r.tax) - cost(id, s, r.out)) * bands * batches;
+    return {
+      r, s, bands, batches, singleSec, sec, count, qty, gross, tax, material,
+      profit: gross - tax - material,
+      unitCost: cost(id, s, r.out) / r.out,
+      unitProfit: n(s.salePrice) * (1 - r.tax) - cost(id, s, r.out) / r.out,
+      hour: perSetProfit * 3600 / sec,
+      complete: perSetProfit * Math.floor(3600 / sec)
+    };
+  };
+
+  window.result = function () {
+    const c = calculate(state.product), r = c.r, s = c.s;
+    const materials = r.materials.map(([k, label, q]) =>
+      `${fmt(q * c.count * c.bands * c.batches)} ${esc(label)}`
+    ).join(' · ');
+    return `<section class="card" id="calcResult"><h2>Hesaplama sonucu</h2>
+      <div class="unit-section"><div class="unit-title">📦 TEK ÜRÜN HESABI</div>
+        <div class="unit-grid">
+          <div class="unit-tile cost"><div class="unit-label">Birim maliyet</div><strong>${money(c.unitCost)}</strong></div>
+          <div class="unit-tile ${c.unitProfit >= 0 ? 'profit' : 'loss'}"><div class="unit-label">Birim net kâr</div><strong>${money(c.unitProfit)}</strong></div>
+        </div>
+        <p class="hint">Başabaş satış fiyatı: ${money(Math.ceil(c.unitCost / (1 - r.tax)))}</p>
+      </div>
+      <div class="stats">
+        <div class="stat primary"><small>Toplam net kâr</small><strong>${money(c.profit)}</strong></div>
+        <div class="stat"><small>60 dakikada biten turların kârı</small><strong>${money(c.complete)}</strong></div>
+        <div class="stat"><small>Teorik saatlik net kâr</small><strong>${money(c.hour)}</strong></div>
+        <div class="stat"><small>Üretilen</small><strong>${fmt(c.qty)} adet</strong></div>
+        <div class="stat"><small>Üretim süresi</small><strong>${duration(c.count * c.sec)}</strong></div>
+        <div class="stat"><small>Tamamlanan üretim turu</small><strong>${fmt(c.count)}</strong></div>
+      </div>
+      <div class="row"><span>Hammadde</span><span>${materials}</span></div>
+      <div class="row"><span>Hammadde maliyeti</span><span>${money(c.material)}</span></div>
+      <div class="row"><span>Brüt satış</span><span>${money(c.gross)}</span></div>
+      <div class="row"><span>Satış vergisi (%${fmt(r.tax * 100, 1)})</span><span>−${money(c.tax)}</span></div>
+      <p class="hint">${fmt(c.bands)} bant × ${fmt(c.batches)} parti = tur başına ${fmt(c.bands*c.batches*r.out)} ürün.
+        Bir parti ${duration(c.singleSec)}; bant başına tam tur ${duration(c.sec)}.
+        Bantlar eşzamanlı, aynı banttaki partiler ardışık çalışır. Gerçek oyun süren farklıysa tek parti süresini düzenle.</p>
+    </section>`;
+  };
+
+  window.calcHtml = function () {
+    const id = state.product, s = state.settings[id], r = recipe(id);
+    let html = originalCalcHtml();
+    const band = field('Eşzamanlı üretim bandı', 'bands', s.bands, 1);
+    const sale = field('Satış fiyatı (akçe)', 'salePrice', s.salePrice);
+    // Bant, parti ve satış aynı satırda; fiyat alanlarını aşağıya itmez.
+    const before = `<div class="grid">${band}${sale}`;
+    const after = `<div class="production-head">
+      ${field('Bant', 'bands', s.bands, 1)}
+      ${field('Parti / bant', 'batches', s.batches, 1)}
+      ${field('Satış (akçe)', 'salePrice', s.salePrice)}
+      </div><div class="batch-summary" id="batchSummary">${fmt(positiveInt(s.bands))} bant × ${fmt(batchCount(id))} parti × ${fmt(r.out)} adet = <strong>${fmt(positiveInt(s.bands)*batchCount(id)*r.out)} adet/tur</strong></div><div class="grid">`;
+    if (!html.includes(before)) throw new Error('Bant alanının yeri bulunamadı.');
+    html = html.replace(before, after);
+    const cycleFields = `<div class="grid">${field('Dakika', 'cycleMins', s.cycleMins, 1)}${field('Saniye', 'cycleSecs', s.cycleSecs, 1)}</div>`;
+    html = html.replace(cycleFields, cycleFields.replace('class="grid"', 'class="grid compact-pair"'));
+    html = html.replace('⏱ Bir üretim döngüsü', '⏱ Tek partinin süresi');
+    const budgetFields = `<div class="grid">${field('Saat', 'hours', s.hours, 1)}${field('Dakika', 'minutes', s.minutes, 1)}</div>`;
+    html = html.replace(budgetFields, budgetFields.replace('class="grid"', 'class="grid compact-pair"'));
+    const info = `<p class="hint">Tek parti: ${fmt(r.out)} adet · ${r.materials.map(([k,l,q])=>fmt(q)+' '+esc(l)).join(' + ')}.
+      ${fmt(s.bands)} bant × ${fmt(s.batches)} parti = <strong>${fmt(r.out*positiveInt(s.bands)*batchCount(id))} adet/tur</strong>.
+      Bir banttaki ${fmt(batchCount(id))} parti ${duration(cycle(id)*batchCount(id))} sürer; bantlar aynı anda çalışır.</p>`;
+    html = html.replace(/<p class="hint">Tek döngü:[\s\S]*?<\/p>/, `<p class="hint">Tek parti: ${fmt(r.out)} adet · ${r.materials.map(([k,l,q])=>fmt(q)+' '+esc(l)).join(' + ')}. Bir banttaki ${fmt(batchCount(id))} parti ${duration(cycle(id)*batchCount(id))} sürer.</p>`);
+    return html;
+  };
+
+  window.ranking = function () {
+    return originalRanking().replace(
+      'Kayıtlı fiyatlara ve eşzamanlı bant sayısına göre teorik kâr. Eksik fiyatlı sonuçlar kesin değildir.',
+      'Kayıtlı fiyatlara ve eşzamanlı bant sayısına göre teorik kâr. Partiler aynı bantta ardışık üretildiğinden parti sayısı saatlik hızı tek başına artırmaz. Eksik fiyatlı sonuçlar kesin değildir.'
+    );
+  };
+
+  window.trackHtml = function () {
+    const id = state.product, s = state.settings[id], r = recipe(id);
+    let html = originalTrackHtml();
+    if (trackType === 'production') {
+      const cycles = field('Tam döngü', 'entryCycles', 1, 1);
+      const bands = field('Üretim bandı', 'entryBands', s.bands, 1);
+      const before = `<div class="grid">${cycles}${bands}`;
+      const after = `<div class="production-head">
+        ${field('Tur sayısı', 'entryCycles', 1, 1)}
+        ${field('Bant', 'entryBands', s.bands, 1)}
+        ${field('Parti / bant', 'entryBatches', s.batches, 1)}
+      </div><div class="grid">`;
+      if (!html.includes(before)) throw new Error('Günlük üretim alanının yeri bulunamadı.');
+      html = html.replace(before, after);
+      html = html.replace(/(<strong id="entryOutput">)[\s\S]*?(<\/strong>)/,
+        `$1${fmt(r.out * positiveInt(s.bands) * batchCount(id))}$2`);
+    }
+    return html;
+  };
+
+  window.bind = function () {
+    originalBind();
+    if (state.section === 'calc') {
+      for (const key of ['bands','batches']) {
+        document.getElementById(key)?.addEventListener('input', () => {
+          const r = recipe(state.product), st = state.settings[state.product];
+          const el = document.getElementById('batchSummary');
+          if (el) el.innerHTML = `${fmt(positiveInt(st.bands))} bant × ${fmt(batchCount(state.product))} parti × ${fmt(r.out)} adet = <strong>${fmt(positiveInt(st.bands)*batchCount(state.product)*r.out)} adet/tur</strong>`;
+        });
+      }
+    }
+    if (state.section !== 'track' || trackType !== 'production') return;
+    function updateEntryOutput() {
+      const value = key => n(document.getElementById(key)?.value);
+      const output = document.getElementById('entryOutput');
+      if (output) output.textContent = fmt(recipe(state.product).out * value('entryCycles') * value('entryBands') * value('entryBatches')) + ' adet';
+    }
+    for (const key of ['entryCycles','entryBands','entryBatches']) {
+      document.getElementById(key)?.addEventListener('input', updateEntryOutput);
+    }
+    updateEntryOutput();
+  };
+
+  window.addEntry = function (event) {
+    event.preventDefault();
+    const id=state.product, r=recipe(id), get=key=>n(document.getElementById(key)?.value);
+    const e={id:crypto.randomUUID(),date:trackDate,created:Date.now(),product:id,type:trackType};
+    if (trackType === 'production') {
+      const cycles=get('entryCycles'),bands=get('entryBands'),batches=get('entryBatches');
+      if (![cycles,bands,batches].every(x=>Number.isInteger(x)&&x>0)) {
+        return alert('Tur, bant ve parti sayıları pozitif tam sayı olmalı.');
+      }
+      e.qty = cycles * bands * batches * r.out;
+      e.bands = bands; e.batches = batches;
+      if (id === 'silverJewelry') e.recipe = state.settings[id].recipe || 'pearl';
+      r.materials.filter(([k])=>!(id==='sword'&&k==='steelPrice')).forEach(([k])=>e[k]=get('entry_'+k));
+      if (id === 'rifle') e.stockTax=!!state.settings.rifle.stockTax;
+    } else {
+      e.qty=get('entryQty');e.price=get('entryPrice');
+      if (!Number.isInteger(e.qty)||e.qty<=0||e.price<0) return alert('Adet ve fiyatı kontrol et.');
+    }
+    if (Object.values(e).some(v=>typeof v==='number'&&(!Number.isFinite(v)||v<0))) {
+      return alert('Geçersiz sayı.');
+    }
+    const check=replay([...state.ledger,e]);
+    if(check.error) return alert(check.error);
+    state.ledger.push(e);save();render();
+  };
+
+  // Eski bir yedek sonradan içe aktarılırsa da yeni alanları tamamla.
+  window.render = function () {
+    migrateBatchSettings();
+    originalRender();
+    const pill = document.querySelector('header .pill');
+    if (pill) pill.textContent = 'v1.5';
+  };
+
+  const style = document.createElement('style');
+  style.textContent = `
+    .production-head{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,.9fr) minmax(0,1.3fr);gap:8px;align-items:start}
+    .production-head .field{min-width:0;margin-bottom:10px}
+    .production-head .field label{font-size:11px;white-space:normal;line-height:1.25;min-height:2.5em}
+    .production-head input{width:100%;min-width:0;padding:10px 7px;font-size:16px}
+    .batch-summary{margin:0 0 13px;padding:8px 10px;background:#101f30;border:1px solid #2c4f68;border-radius:9px;color:#cbd5e1;font-size:12px;line-height:1.45}
+    .batch-summary strong{color:#93c5fd;font-size:14px}
+    .grid.compact-pair{grid-template-columns:repeat(2,minmax(0,1fr))}
+    @media(max-width:390px){.grid.compact-pair{grid-template-columns:repeat(2,minmax(0,1fr))}.production-head{gap:6px}}
+  `;
+  document.head.appendChild(style);
+  const pill=document.querySelector('header .pill');
+  if(pill) pill.textContent='v1.5';
+  render();
+})();
